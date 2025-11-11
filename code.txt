@@ -1,0 +1,108 @@
+ # --- 1. Import Libraries ---
+import numpy as np
+import pandas as pd
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.model_selection import train_test_split
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense
+
+# --- 2. Generate a Synthetic Dataset ---
+# In a real-world scenario, you would load data from a file,
+# but we'll generate a sine wave to simulate a temperature time series
+# for demonstration purposes. This ensures the code is self-contained.
+def generate_temperature_data(num_days=365*2):
+    """Generates a synthetic time-series of temperatures."""
+    time = np.arange(0, num_days, 1)
+    # Simulate a yearly cycle with some noise
+    temperature = 25 * np.sin(2 * np.pi * time / 365) + 15 + np.random.normal(0, 2, num_days)
+    df = pd.DataFrame(temperature, columns=['temperature'])
+    return df
+
+print("Generating synthetic temperature data...")
+df = generate_temperature_data()
+
+# --- 3. Preprocess the Data for LSTM ---
+# LSTMs work best with normalized data.
+scaler = MinMaxScaler(feature_range=(0, 1))
+scaled_data = scaler.fit_transform(df['temperature'].values.reshape(-1, 1))
+
+# Function to create sequences for the LSTM model
+def create_sequences(data, look_back=7):
+    """
+    Creates sequences of a specified length from the time-series data.
+    
+    Args:
+        data (np.array): The time-series data.
+        look_back (int): The number of previous timesteps to use as input.
+
+    Returns:
+        tuple: A tuple containing the input sequences (X) and the output values (y).
+    """
+    X, y = [], []
+    for i in range(len(data) - look_back - 1):
+        # Create a sequence of 'look_back' days
+        a = data[i:(i + look_back), 0]
+        X.append(a)
+        # The target is the temperature of the next day
+        y.append(data[i + look_back, 0])
+    return np.array(X), np.array(y)
+
+look_back = 7  # Use the last 7 days to predict the next day's temperature
+X, y = create_sequences(scaled_data, look_back)
+
+# Reshape input to be [samples, time steps, features] for LSTM
+# The number of features is 1 since we are only using temperature.
+X = np.reshape(X, (X.shape[0], X.shape[1], 1))
+
+# Split the data into training and testing sets
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+print("Data split into training and testing sets.")
+
+# --- 4. Build LSTM Model ---
+print("\nBuilding LSTM model...")
+model = Sequential()
+model.add(LSTM(50, return_sequences=True, input_shape=(look_back, 1)))
+model.add(LSTM(50))
+model.add(Dense(1))
+
+model.compile(loss='mean_squared_error', optimizer='adam')
+model.summary()
+
+# --- 5. Train the Model ---
+epochs = 5
+batch_size = 32
+print("\nTraining model...")
+model.fit(X_train, y_train, epochs=epochs, batch_size=batch_size, verbose=2, validation_data=(X_test, y_test))
+
+# --- 6. Predict User Input Temperature ---
+def predict_next_day_temp(last_days_temp):
+    """
+    Predicts the next day's temperature based on a sequence of recent temperatures.
+
+    Args:
+        last_days_temp (list): A list of the last 'look_back' days' temperatures.
+    """
+    # Normalize the input data
+    # IMPORTANT: Use the same scaler that was fitted on the training data
+    scaled_input = scaler.transform(np.array(last_days_temp).reshape(-1, 1))
+
+    # Reshape for the model
+    input_seq = np.reshape(scaled_input, (1, look_back, 1))
+
+    # Make the prediction
+    prediction = model.predict(input_seq, verbose=0)
+
+    # Inverse transform the prediction to get the original temperature scale
+    predicted_temp = scaler.inverse_transform(prediction)[0][0]
+
+    return predicted_temp
+
+# --- 7. Run Prediction ---
+# Get the last 'look_back' days from the original (unscaled) dataframe
+last_days = df['temperature'].values[-look_back:]
+
+# Predict the temperature for the next day
+predicted_temperature = predict_next_day_temp(last_days)
+
+print(f"\nLast {look_back} days temperatures: {np.round(last_days, 2)}")
+print(f"Predicted temperature for the next day: {predicted_temperature:.2f} °C")
